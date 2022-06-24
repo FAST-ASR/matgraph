@@ -1,95 +1,105 @@
 # SPDX-License-Identifier: MIT
 
 import math
+import torch
 from collections.abc import MutableMapping
 from juliacall import Main as jl
 
-def fsm_from_json(jsonstr):
-    return jl.FSM(jsonstr)
 
-def Label(x):
-    return jl.Label(x)
+# Set the Julia environment.
+jl.seval("using Adapt")
+jl.seval("using Serialization")
+jl.seval("using CUDA")
+jl.seval("using CUDA.CUSPARSE")
+jl.seval("using DLPack")
+jl.seval("using MarkovModels")
+jl.seval("using Semirings")
+jl.seval("using SparseArrays")
+jl.seval("using PythonCall")
 
-def union(fsm1, fsm2):
-    return jl.union(fsm1, fsm2)
+jl.seval("""
+toarray(T, X) = [pyconvert(T, x) for x in X]
+""")
 
-def cat(fsm1, fsm2):
-    return jl.cat(fsm1, fsm2)
+jl.seval("""
+transfer(x, fn::PythonCall.Py) =
+    DLPack.unsafe_wrap(DLPack.DLManagedTensor(fn(x)), x.py)
+""")
 
-def compose(fsm1, fsms):
-    return jl.compose(fsm1, fsms)
+jl.seval("""
+share(x, fn::PythonCall.Py) =
+    DLPack.share(x, fn)
+""")
 
-def determinize(fsm):
-    return jl.determinize(fsm)
+jl.seval("""
+function expandbatch(x, seqlengths)
+    map(t -> expand(t...),
+        zip(eachslice(x, dims = 1), seqlengths))
+end
+""")
 
-def minimize(fsm):
-    return jl.minimize(fsm)
 
-def propagate(fsm):
-    return jl.propagate(fsm)
+class FSM:
 
-def renorm(fsm):
-    return jl.renorm(fsm)
+    @classmethod
+    def from_files(cls, path_fsm, path_smap):
+        return FSM(jl.deserialize(path_fsm), jl.deserialize(path_smap))
 
-def fsmdict():
-    return jl.Dict()
+    def __init__(self, fsm, smap):
+        self.fsm = fsm
+        self.smap = smap
 
-def linear_fsm(seq, precision="Float32", init_sil_prob=0, sil_prob=0,
-               final_sil_prob=0, sil="sil"):
-    """Create a linear FSM from `seq`."""
-    if init_sil_prob > 0:
-        init = [[1, math.log(init_sil_prob)], [2, math.log(1 - init_sil_prob)]]
-        labels = [sil, seq[0]]
-        arcs = [[1, 2, 0]]
-        nstates = 2
-    else:
-        init = [[1, 0]]
-        labels = [seq[0]]
-        nstates = 1
-        arcs = []
+    def cuda(self):
+        self.fsm = jl.adapt(jl.CuArray, self.fsm)
+        self.smap = jl.adapt(jl.CuArray, self.smap)
 
-    for i in range(1, len(seq)):
-        if sil_prob > 0:
-            arcs.append([nstates, nstates+1, math.log(sil_prob)])
-            arcs.append([nstates, nstates+2, math.log(1 - sil_prob)])
-            arcs.append([nstates+1, nstates+2, 0])
-            labels.append(sil)
-            labels.append(seq[i])
-            nstates += 2
+    def _jl_array_type(self):
+        K = jl.eltype(self.fsm.α̂)
+        if torch.cuda.is_available():
+            Ta = jl.seval(f'CuArray{{{K}}}')
         else:
-            arcs.append([nstates, nstates+1, 0])
-            labels.append(seq[i])
-            nstates += 1
-
-    if final_sil_prob > 0:
-        final = [[nstates, math.log(1-final_sil_prob)], [nstates+1, 0]]
-        arcs.append([nstates, nstates+1, math.log(final_sil_prob)])
-        labels.append(sil)
-    else:
-        final = [[nstates, 0]]
+            Ta = jl.seval(f'Array{{{K}}}')
+        return Ta
 
 
-    topo = f"""
-    {{
-        "semiring": "LogSemiring{{{precision}}}",
-        "initstates": {init},
-        "arcs": {arcs},
-        "finalstates": {final},
-        "labels": ["{'","'.join(labels)}"]
-    }}
-    """
-    return renorm(fsm_from_json(topo))
+class BatchFSM:
 
-def save(path, obj):
-    jl.serialize(path, obj)
+    @classmethod
+    def from_list(cls,fsms):
+        bfsm = jl.rawunion(*[f.fsm for f in fsms])
+        smaps = [f.smap for f in fsms]
+        return BatchFSM(bfsm, smaps)
 
-def load(path):
-    return jl.deserialize(path)
+    def __init__(self, bfsm, smaps):
+        self.bfsm = bfsm
+        self.smaps = smaps
 
-jl.seval("mergengrams(ng1, ng2) = mergewith((x, y) -> x .+ y, ng1, ng2) ")
-def merge_ngrams(ng1, ng2):
-    return jl.mergengrams(ng1, ng2)
+    def cuda(self):
+        bfsm = jl.adapt(jl.CuArray, self.bfsm)
+        smaps = [jl.CuSparseMatrixCSR(jl.adapt(jl.CuArray, C))
+                 for C in self.smaps]
+        return BatchFSM(bfsm, smaps)
 
-def ngrams(fsm, order=2):
-    return jl.totalngramsum(fsm, order = order)
+    def _jl_array_type(self):
+        K = jl.eltype(self.bfsm.α̂)
+        if torch.cuda.is_available():
+            Ta = jl.seval(f'CuArray{{{K}}}')
+        else:
+            Ta = jl.seval(f'Array{{{K}}}')
+        return Ta
+
+def prepare_data(fsm, X, seqlengths):
+    Ta = fsm._jl_array_type()
+    # We assume the X to be shaped as B x L x D where B is the batch
+    # size, L is the sequence length and D is the features dimension.
+    X = jl.permutedims(jl.transfer(X, torch.to_dlpack), (3, 1, 2))
+    X = jl.convert(Ta, X)
+    X = jl.expandbatch(X, jl.toarray(jl.Int, seqlengths))
+    return X
+
+def pdfposteriors(bfsm, X, seqlengths):
+    X = prepare_data(bfsm, X, seqlengths)
+    Cs = jl.toarray(jl.typeof(bfsm.smaps[1]), bfsm.smaps)
+    Z = jl.pdfposteriors(bfsm.bfsm, X, Cs)
+    return jl.share(jl.permutedims(Z, (2, 3, 1)), torch.from_dlpack)
 
