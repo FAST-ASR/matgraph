@@ -51,7 +51,8 @@ class FSM:
 
     def cuda(self):
         self.fsm = jl.adapt(jl.CuArray, self.fsm)
-        self.smap = jl.adapt(jl.CuArray, self.smap)
+        self.smap = jl.CuSparseMatrixCSR(jl.adapt(jl.CuArray, self.smap))
+        return self
 
 
 class BatchFSM:
@@ -78,7 +79,6 @@ def pdfposteriors(bfsm, X, seqlengths):
     # size, L is the sequence length and D is the features dimension.
     X = jl.permutedims(jl.transfer(X, torch.to_dlpack), (3, 1, 2))
     X = jl.expandbatch(X, jl.toarray(jl.Int, seqlengths))
-    X = prepare_data(bfsm, X, seqlengths)
     Cs = jl.toarray(jl.typeof(bfsm.smaps[1]), bfsm.smaps)
     Z, ttl = jl.pdfposteriors(bfsm.bfsm, X, Cs)
     return jl.share(jl.permutedims(Z, (2, 3, 1)), torch.from_dlpack), \

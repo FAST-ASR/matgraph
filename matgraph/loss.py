@@ -1,28 +1,34 @@
 # SPDX-License-Identifier: MIT
 
 import torch
+from .fsm import pdfposteriors
 
 class FSMLogMarginal(torch.autograd.Function):
+    """Compute the log-marginal probabily of a sequence given a graph."""
 
     @staticmethod
-    def forward(ctx, input, lengths, fsms):
-        print("forward pass")
-        #ttl, grad = forward_backward(...)
-        ctx.save_for_backward(grad)
-        return ttl
+    def forward(ctx, input, seqlengths, fsm) -> torch.Tensor:
+        posts, logprob = pdfposteriors(fsm, input, seqlengths)
+        ctx.save_for_backward(posts)
+        return sum(logprob)
 
     @staticmethod
-    def backward(ctx, out_grad):
-        grad, = ctx.saved_tensors
-        return torch.mul(grad, out_grad), None, None
+    def backward(ctx, f_grad):
+        input_grad, = ctx.saved_tensors
+        return torch.mul(input_grad, f_grad), None, None
+
 
 class LFMMILoss(torch.nn.Module):
+    """Lattice-free MMI loss function."""
 
-    def __init__(self, den_fsm):
+    def __init__(self, denfsms, numfsms, den_scale=1.0):
         super().__init__()
-        self.den_fsm = den_fsm
+        self.denfsms = denfsms
+        self.numfsms = numfsms
+        self.den_scale = den_scale
 
-    def forward(self, x, x_lengths, num_fsms):
-        #den_graphs =
-        pass
+    def forward(self, input, seqlengths):
+        num_llh = FSMLogMarginal.apply(input, seqlengths, self.numfsms)
+        den_llh = FSMLogMarginal.apply(input, seqlengths, self.denfsms)
+        return -(num_llh - self.den_scale * den_llh)
 
