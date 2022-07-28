@@ -30,12 +30,13 @@ share(x, fn::PythonCall.Py) =
 """)
 
 jl.seval("""
-convertbatch(T, X) = [copyto!(similar(x, T), x) for x in eachslice(X; dims=1)]
+convertbatch(T, X) = copyto!(similar(X, T), X)
 """)
 
 jl.seval("""
-expandbatch(X, seqlengths) = map(zip(X, seqlengths)) do (x, seqlength)
-    expand(x, seqlength)
+function expandbatch(x, seqlengths)
+    map(t -> expand(t...),
+        zip(eachslice(x, dims = 1), seqlengths))
 end
 """)
 
