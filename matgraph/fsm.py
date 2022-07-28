@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-import math
 import torch
-from collections.abc import MutableMapping
 from juliacall import Main as jl
 
 
@@ -32,10 +30,17 @@ share(x, fn::PythonCall.Py) =
 """)
 
 jl.seval("""
-function expandbatch(x, seqlengths)
-    map(t -> expand(t...),
-        zip(eachslice(x, dims = 1), seqlengths))
+convertbatch(T, X) = [pyconvert(Matrix{T}, x) for x in eachslice(X; dims=1)]
+""")
+
+jl.seval("""
+expandbatch(X, seqlengths) = map(zip(X, seqlengths)) do (x, seqlength)
+    expand(x, seqlength)
 end
+""")
+
+jl.seval("""
+fsmtype(::FSM{K}) where K = K
 """)
 
 
@@ -58,7 +63,7 @@ class FSM:
 class BatchFSM:
 
     @classmethod
-    def from_list(cls,fsms):
+    def from_list(cls, fsms):
         bfsm = jl.rawunion(*[f.fsm for f in fsms])
         smaps = [f.smap for f in fsms]
         return BatchFSM(bfsm, smaps)
@@ -78,8 +83,9 @@ def pdfposteriors(bfsm, X, seqlengths):
     # We assume the X to be shaped as B x L x D where B is the batch
     # size, L is the sequence length and D is the features dimension.
     X = jl.permutedims(jl.transfer(X, torch.to_dlpack), (3, 1, 2))
+    X = jl.convertbatch(jl.fsmtype(bfsm.bfsm), X)
     X = jl.expandbatch(X, jl.toarray(jl.Int, seqlengths))
-    Cs = jl.toarray(jl.typeof(bfsm.smaps[1]), bfsm.smaps)
+    Cs = jl.toarray(jl.typeof(bfsm.smaps[0]), bfsm.smaps)
     Z, ttl = jl.pdfposteriors(bfsm.bfsm, X, Cs)
     return jl.share(jl.permutedims(Z, (2, 3, 1)), torch.from_dlpack), \
            jl.share(ttl, torch.from_dlpack)
