@@ -30,7 +30,7 @@ share(x, fn::PythonCall.Py) =
 """)
 
 jl.seval("""
-convertbatch(T, X) = [pyconvert(Matrix{T}, x) for x in eachslice(X; dims=1)]
+convertbatch(T, X) = [copyto!(similar(x, T), x) for x in eachslice(X; dims=1)]
 """)
 
 jl.seval("""
