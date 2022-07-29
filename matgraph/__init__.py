@@ -2,6 +2,5 @@
 import torch
 from juliacall import Main as jl
 
-
-from .fsm import *
+from .fsa import *
 from .loss import LFMMILoss
