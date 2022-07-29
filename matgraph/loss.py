@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import torch
-from .fsm import pdfposteriors
+from .fsa import pdfposteriors
 
 class FSMLogMarginal(torch.autograd.Function):
     """Compute the log-marginal probabily of a sequence given a graph."""

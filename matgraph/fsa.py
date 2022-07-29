@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import math
-import torch
+from torch.utils.dlpack import from_dlpack, to_dlpack
 from collections.abc import MutableMapping
 from juliacall import Main as jl
 
@@ -39,48 +39,47 @@ end
 """)
 
 
-class FSM:
+class CompiledFSA:
 
     @classmethod
-    def from_files(cls, path_fsm, path_smap):
-        return FSM(jl.deserialize(path_fsm), jl.deserialize(path_smap))
+    def from_files(cls, path_fsa, path_smap):
+        return CompiledFSA(jl.deserialize(path_fsa), jl.deserialize(path_smap))
 
-    def __init__(self, fsm, smap):
-        self.fsm = fsm
+    def __init__(self, fsa, smap):
+        self.fsa = fsa
         self.smap = smap
 
     def cuda(self):
-        self.fsm = jl.adapt(jl.CuArray, self.fsm)
+        self.fsa = jl.adapt(jl.CuArray, self.fsa)
         self.smap = jl.CuSparseMatrixCSR(jl.adapt(jl.CuArray, self.smap))
         return self
 
 
-class BatchFSM:
+class BatchCompiledFSA:
 
     @classmethod
-    def from_list(cls,fsms):
-        bfsm = jl.rawunion(*[f.fsm for f in fsms])
-        smaps = [f.smap for f in fsms]
-        return BatchFSM(bfsm, smaps)
+    def from_list(cls,fsas):
+        bfsa = jl.batch(*[f.fsa for f in fsas])
+        smaps = [f.smap for f in fsas]
+        return BatchCompiledFSA(bfsa, smaps)
 
-    def __init__(self, bfsm, smaps):
-        self.bfsm = bfsm
+    def __init__(self, bfsa, smaps):
+        self.bfsa = bfsa
         self.smaps = smaps
 
     def cuda(self):
-        bfsm = jl.adapt(jl.CuArray, self.bfsm)
+        bfsa = jl.adapt(jl.CuArray, self.bfsa)
         smaps = [jl.CuSparseMatrixCSR(jl.adapt(jl.CuArray, C))
                  for C in self.smaps]
-        return BatchFSM(bfsm, smaps)
+        return BatchCompiledFSA(bfsa, smaps)
 
 
-def pdfposteriors(bfsm, X, seqlengths):
+def pdfposteriors(bfsa, X, seqlengths):
     # We assume the X to be shaped as B x L x D where B is the batch
     # size, L is the sequence length and D is the features dimension.
-    X = jl.permutedims(jl.transfer(X, torch.to_dlpack), (3, 1, 2))
+    X = jl.permutedims(jl.transfer(X, to_dlpack), (3, 1, 2))
     X = jl.expandbatch(X, jl.toarray(jl.Int, seqlengths))
-    Cs = jl.toarray(jl.typeof(bfsm.smaps[1]), bfsm.smaps)
-    Z, ttl = jl.pdfposteriors(bfsm.bfsm, X, Cs)
-    return jl.share(jl.permutedims(Z, (2, 3, 1)), torch.from_dlpack), \
-           jl.share(ttl, torch.from_dlpack)
+    Cs = jl.toarray(jl.typeof(bfsa.smaps[1]), bfsa.smaps)
+    Z, ttl = jl.pdfposteriors(bfsa.bfsa, X, Cs)
+    return jl.share(jl.permutedims(Z, (2, 3, 1)), from_dlpack), jl.share(ttl, from_dlpack)
 
