@@ -32,10 +32,18 @@ share(x, fn::PythonCall.Py) =
 """)
 
 jl.seval("""
+convertbatch(T, X) = copyto!(similar(X, T), X)
+""")
+
+jl.seval("""
 function expandbatch(x, seqlengths)
     map(t -> expand(t...),
         zip(eachslice(x, dims = 1), seqlengths))
 end
+""")
+
+jl.seval("""
+fsmtype(::FSM{K}) where K = K
 """)
 
 
@@ -58,7 +66,7 @@ class CompiledFSA:
 class BatchCompiledFSA:
 
     @classmethod
-    def from_list(cls,fsas):
+    def from_list(cls, fsas):
         bfsa = jl.batch(*[f.fsa for f in fsas])
         smaps = [f.smap for f in fsas]
         return BatchCompiledFSA(bfsa, smaps)
@@ -77,9 +85,11 @@ class BatchCompiledFSA:
 def pdfposteriors(bfsa, X, seqlengths):
     # We assume the X to be shaped as B x L x D where B is the batch
     # size, L is the sequence length and D is the features dimension.
-    X = jl.permutedims(jl.transfer(X, to_dlpack), (3, 1, 2))
+    X = jl.permutedims(jl.transfer(X, torch.to_dlpack), (3, 1, 2))
+    X = jl.convertbatch(jl.fsmtype(bfsm.bfsm), X)
     X = jl.expandbatch(X, jl.toarray(jl.Int, seqlengths))
-    Cs = jl.toarray(jl.typeof(bfsa.smaps[1]), bfsa.smaps)
-    Z, ttl = jl.pdfposteriors(bfsa.bfsa, X, Cs)
-    return jl.share(jl.permutedims(Z, (2, 3, 1)), from_dlpack), jl.share(ttl, from_dlpack)
+    Cs = jl.toarray(jl.typeof(bfsm.smaps[0]), bfsm.smaps)
+    Z, ttl = jl.pdfposteriors(bfsm.bfsm, X, Cs)
+    return jl.share(jl.permutedims(Z, (2, 3, 1)), torch.from_dlpack), \
+           jl.share(ttl, torch.from_dlpack)
 
