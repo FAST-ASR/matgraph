@@ -3,7 +3,6 @@
 import torch
 from .fsm import pdfposteriors, BatchFSM, FSM
 
-
 class FSMLogMarginal(torch.autograd.Function):
     """Compute the log-marginal probabily of a sequence given a graph."""
 
