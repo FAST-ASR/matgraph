@@ -1,6 +1,6 @@
 import torch
 
-from .fsm import BatchFSM, FSM
+from .fsa import BatchCompiledFSA, CompiledFSA
 from .loss import FSMLogMarginal
 
 from itertools import permutations
@@ -23,14 +23,14 @@ def multi_loss(f, llhs, seqlengths, numfsms):
 class PIT_LFMMILoss(torch.nn.Module):
     """Permutation invariant training wrapper for MMI loss."""
 
-    def __init__(self, denfsm: FSM, den_scale=1.0, do_avg=False):
+    def __init__(self, denfsm: CompiledFSA, den_scale=1.0, do_avg=False):
         super().__init__()
         self.denfsm = denfsm
         self.den_scale = den_scale
         self.do_avg = do_avg
 
     def forward(
-        self, est_llhs: torch.Tensor, seqlengths: torch.Tensor, numfsms: List[BatchFSM]
+        self, est_llhs: torch.Tensor, seqlengths: torch.Tensor, numfsms: List[BatchCompiledFSA]
     ):
         """
         Args:
@@ -48,7 +48,7 @@ class PIT_LFMMILoss(torch.nn.Module):
         ), f"Expected number of sources is {n_spkrs}, got {input.size(1)}"
         llhs = est_llhs.permute(1, 0, 2, 3)  # speakers are now first dimension
         seqlengths = seqlengths.t()  # S x B
-        denfsms = BatchFSM.from_list([self.denfsm for _ in range(batch_size)])
+        denfsms = BatchCompiledFSA.from_list([self.denfsm for _ in range(batch_size)])
 
         log_marginal = FSMLogMarginal.apply
         den_llh = torch.sum(

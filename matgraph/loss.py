@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import torch
-from .fsm import pdfposteriors, BatchFSM, FSM
+from .fsa import pdfposteriors, BatchCompiledFSA, CompiledFSA
 
 
 class FSMLogMarginal(torch.autograd.Function):
@@ -9,7 +9,7 @@ class FSMLogMarginal(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx, input: torch.Tensor, seqlengths: torch.Tensor, fsm: BatchFSM
+        ctx, input: torch.Tensor, seqlengths: torch.Tensor, fsm: BatchCompiledFSA
     ) -> torch.Tensor:
         """
         Args:
@@ -33,13 +33,13 @@ class FSMLogMarginal(torch.autograd.Function):
 class LFMMILoss(torch.nn.Module):
     """Lattice-free MMI loss function."""
 
-    def __init__(self, denfsm: FSM, den_scale=1.0, do_avg=False):
+    def __init__(self, denfsm: CompiledFSA, den_scale=1.0, do_avg=False):
         super().__init__()
         self.denfsm = denfsm
         self.den_scale = den_scale
         self.do_avg = do_avg
 
-    def forward(self, input: torch.Tensor, seqlengths: torch.Tensor, numfsms: BatchFSM):
+    def forward(self, input: torch.Tensor, seqlengths: torch.Tensor, numfsms: BatchCompiledFSA):
         """
         Args:
           input: pdf log-likelihoods of shape B x T x C
@@ -49,7 +49,7 @@ class LFMMILoss(torch.nn.Module):
         Returns:
           - LF-MMI loss (scalar)
         """
-        denfsms = BatchFSM.from_list([self.denfsm for _ in range(input.size(0))])
+        denfsms = BatchCompiledFSA.from_list([self.denfsm for _ in range(input.size(0))])
         num_llh = FSMLogMarginal.apply(input, seqlengths, numfsms)
         den_llh = FSMLogMarginal.apply(input, seqlengths, denfsms)
 
