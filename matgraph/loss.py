@@ -14,19 +14,19 @@ class FSMLogMarginal(torch.autograd.Function):
         """
         Args:
           input: Sequences of PDF log-likelihoods (with shape B x T x C)
-          seqlengths: Array with length of each sequence (with shape N)
+          seqlengths: Array with length of each sequence (with shape B)
 
         Returns:
           logprob: Total probability of the sequence
         """
         posts, logprob = pdfposteriors(fsm, input, seqlengths.detach().numpy())
         ctx.save_for_backward(posts)
-        return logprob  # shape N
+        return logprob  # shape B
 
     @staticmethod
     def backward(ctx, f_grad):
         input_grad, = ctx.saved_tensors
-        f_grad = f_grad.unsqueeze(1).unsqueeze(2)  # shape Nx1x1
+        f_grad = f_grad.unsqueeze(1).unsqueeze(2)  # shape Bx1x1
         return f_grad * input_grad, None, None  # broadcast mulitply
 
 
