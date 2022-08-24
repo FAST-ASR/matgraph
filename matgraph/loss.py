@@ -25,7 +25,7 @@ class FSMLogMarginal(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, f_grad):
-        (input_grad,) = ctx.saved_tensors
+        input_grad, = ctx.saved_tensors
         f_grad = f_grad.unsqueeze(1).unsqueeze(2)  # shape Nx1x1
         return f_grad * input_grad, None, None  # broadcast mulitply
 
@@ -52,7 +52,9 @@ class LFMMILoss(torch.nn.Module):
         denfsms = BatchFSM.from_list([self.denfsm for _ in range(input.size(0))])
         num_llh = FSMLogMarginal.apply(input, seqlengths, numfsms)
         den_llh = FSMLogMarginal.apply(input, seqlengths, denfsms)
+
         loss = -(num_llh - self.den_scale * den_llh)
+
         if self.do_avg:
-            return loss.sum() / loss.size(0)
+            return loss.sum() / seqlengths.sum()
         return loss.sum()
