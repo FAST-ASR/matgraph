@@ -67,7 +67,7 @@ class BatchCompiledFSA:
 
     @classmethod
     def from_list(cls, fsas):
-        bfsa = jl.batch(*[f.fsa for f in fsas])
+        bfsa = jl.rawunion(*[f.fsa for f in fsas])
         smaps = [f.smap for f in fsas]
         return BatchCompiledFSA(bfsa, smaps)
 
