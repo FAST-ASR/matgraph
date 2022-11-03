@@ -43,23 +43,35 @@ end
 """)
 
 jl.seval("""
-fsmtype(::FSM{K}) where K = K
+fsmtype(::CompiledFSM{K}) where K = K
+""")
+
+jl.seval("""
+function loadbatch(fsmfiles)
+	batch([deserialize(pyconvert(String, f)) for f in fsmfiles]...)
+end
+""")
+
+jl.seval("""
+take_(x) = take!(x)
+""")
+
+jl.seval("""
+pdfposteriors(fsa, X) = MarkovModels.pdfposteriors2(fsa, X)
 """)
 
 
 class CompiledFSA:
 
     @classmethod
-    def from_files(cls, path_fsa, path_smap):
-        return CompiledFSA(jl.deserialize(path_fsa), jl.deserialize(path_smap))
+    def from_file(cls, path_fsa):
+        return CompiledFSA(jl.deserialize(path_fsa))
 
-    def __init__(self, fsa, smap):
+    def __init__(self, fsa):
         self.fsa = fsa
-        self.smap = smap
 
     def cuda(self):
         self.fsa = jl.adapt(jl.CuArray, self.fsa)
-        self.smap = jl.CuSparseMatrixCSR(jl.adapt(jl.CuArray, self.smap))
         return self
 
 
@@ -67,19 +79,38 @@ class BatchCompiledFSA:
 
     @classmethod
     def from_list(cls, fsas):
-        bfsa = jl.rawunion(*[f.fsa for f in fsas])
-        smaps = [f.smap for f in fsas]
-        return BatchCompiledFSA(bfsa, smaps)
+        bfsa = jl.batch(*[f.fsa for f in fsas])
+        return BatchCompiledFSA(bfsa)
 
-    def __init__(self, bfsa, smaps):
+    @classmethod
+    def from_files(cls, files):
+        #bfsa = jl.batch(*[f.fsa for f in fsas])
+        bfsa = jl.loadbatch(files)
+        return BatchCompiledFSA(bfsa)
+
+    @classmethod
+    def from_bin(cls, fsmbytes):
+        bfsa = jl.batch(*[
+            jl.deserialize(jl.IOBuffer(jl.Array(f)))
+            for f in fsmbytes
+        ])
+        #bfsa = jl.deserialize(jl.IOBuffer(jl.Array(fsmbytes)))
+        return BatchCompiledFSA(bfsa)
+
+    #def to_bin(self):
+    #    buf = jl.IOBuffer()
+    #    jl.serialize(buf, self.bfsa)
+    #    jl.flush(buf)
+    #    b = bytes(jl.take_(buf))
+    #    jl.close(buf)
+    #    return b
+
+    def __init__(self, bfsa):
         self.bfsa = bfsa
-        self.smaps = smaps
 
     def cuda(self):
         bfsa = jl.adapt(jl.CuArray, self.bfsa)
-        smaps = [jl.CuSparseMatrixCSR(jl.adapt(jl.CuArray, C))
-                 for C in self.smaps]
-        return BatchCompiledFSA(bfsa, smaps)
+        return BatchCompiledFSA(bfsa)
 
 
 def pdfposteriors(bfsa, X, seqlengths):
@@ -88,8 +119,10 @@ def pdfposteriors(bfsa, X, seqlengths):
     X = jl.permutedims(jl.transfer(X, to_dlpack), (3, 1, 2))
     X = jl.convertbatch(jl.fsmtype(bfsa.bfsa), X)
     X = jl.expandbatch(X, jl.toarray(jl.Int, seqlengths))
-    Cs = jl.toarray(jl.typeof(bfsa.smaps[0]), bfsa.smaps)
-    Z, ttl = jl.pdfposteriors(bfsa.bfsa, X, Cs)
-    return jl.share(jl.permutedims(Z, (2, 3, 1)), from_dlpack), \
+    #Z, ttl = jl.MarkovModels.pdfposteriors2(bfsa.bfsa, X)
+    Z, ttl = jl.pdfposteriors(bfsa.bfsa, X)
+    Z, ttl = jl.share(jl.permutedims(Z, (2, 3, 1)), from_dlpack), \
            jl.share(ttl, from_dlpack)
+    #Z = jl.share(jl.permutedims(Z, (2, 3, 1)), from_dlpack)
+    return Z, ttl
 
